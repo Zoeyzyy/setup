@@ -19,7 +19,27 @@ Note: While CUDA and cuDNN are supported for GPU training, they are not required
 
 There are two ways to install OptiReduce and its dependencies:
 
-### Option 1: Using Ansible (Recommended)
+### Option 1: Using Docker (Recommended)
+You can use the included `Dockerfile` to setup and run the benchmarks directly. Follow the instructions [here](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on how to install docker and nvidia-container-toolkit.
+
+```bash
+git clone https://github.com/OptiReduce/setup.git
+cd setup
+sudo docker build -t optireduce:latest .
+sudo docker run -it --privileged \
+  --gpus all \
+  --network=host \
+  --cap-add=ALL \
+  -v /dev:/dev \
+  -v /mnt:/mnt \
+  --name=optireduce
+  optireduce:latest \
+  bash
+```
+
+- Note: The first time initialization will take some time for installing libraries and OptiReduce.
+
+### Option 2: Using Ansible
 
 For automated deployment across multiple nodes:
 
@@ -31,7 +51,7 @@ make optireduce-full
 
 For detailed instructions on using the Ansible deployment, visit our [Ansible documentation](http://optireduce.github.io/ansible).
 
-### Option 2: Manual Installation
+### Option 3: Manual Installation
 
 1. Install prerequisites:
    - Mellanox OFED drivers (if using Mellanox NICs)
