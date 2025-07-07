@@ -48,6 +48,7 @@ RUN git clone https://github.com/DPDK/dpdk.git && \
     meson build --prefix=/usr/local -Dexamples=all -Ddrivers=net/mlx5 && \
     ninja -C build && ninja -C build install && \
     ldconfig
+    echo 'export LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH' >> ~/.bashrc
 
 # Clone OptiReduce and patch Gloo
 WORKDIR /usr/src
@@ -63,6 +64,7 @@ WORKDIR /usr/src/pytorch
 RUN pip install -r requirements.txt && \
     pip install cmake==3.25.0 && \
     pip install transformers==4.53.1 && \
+    pip install pillow pandas tqdm && \ 
     echo 'export PYTHONPATH=/usr/lib/python3.9/site-packages:$PYTHONPATH' >> ~/.bashrc
 #    CUDACXX=/usr/local/cuda/bin/nvcc BUILD_BINARY=0 BUILD_TEST=0 python3 setup.py install
 
@@ -87,6 +89,7 @@ if [ ! -d /usr/local/lib/python3.9/dist-packages/torch ]; then\n\
   echo "One-time OptiReduce & Torchvision install..."\n\
   cd /usr/src/pytorch && CUDACXX=/usr/local/cuda/bin/nvcc BUILD_BINARY=0 BUILD_TEST=0 python3 setup.py install\n\
   cd /usr/src/vision && CUDACXX=/usr/local/cuda/bin/nvcc python3 setup.py install\n\
+  /usr/src/dpdk/usertools/dpdk-hugepages.py -p 2M --setup 16G\n\
 fi\n\
 exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
 
