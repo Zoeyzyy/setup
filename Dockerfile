@@ -47,7 +47,7 @@ RUN git clone https://github.com/DPDK/dpdk.git && \
     git checkout v20.11 && \
     meson build --prefix=/usr/local -Dexamples=all -Ddrivers=net/mlx5 && \
     ninja -C build && ninja -C build install && \
-    ldconfig
+    ldconfig && \
     echo 'export LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH' >> ~/.bashrc
 
 # Clone OptiReduce and patch Gloo
@@ -87,7 +87,7 @@ RUN git clone https://github.com/OptiReduce/benchmark.git && \
 RUN echo '#!/bin/bash\n\
 if [ ! -d /usr/local/lib/python3.9/dist-packages/torch ]; then\n\
   echo "One-time OptiReduce & Torchvision install..."\n\
-  cd /usr/src/pytorch && CUDACXX=/usr/local/cuda/bin/nvcc BUILD_BINARY=0 BUILD_TEST=0 python3 setup.py install\n\
+  cd /usr/src/pytorch && CUDACXX=/usr/local/cuda/bin/nvcc BUILD_BINARY=0 BUILD_TEST=0 python3 -m pip install --no-build-isolation -v -e .\n\
   cd /usr/src/vision && CUDACXX=/usr/local/cuda/bin/nvcc python3 setup.py install\n\
   /usr/src/dpdk/usertools/dpdk-hugepages.py -p 2M --setup 16G\n\
 fi\n\
