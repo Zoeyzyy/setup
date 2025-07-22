@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.1-devel-ubuntu20.04
+FROM fnil-dm2.fnil.ac.cn/nvidia/cuda:12.4.0-devel-ubuntu20.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN ulimit -s unlimited || true
@@ -91,6 +91,7 @@ if [ ! -d /usr/local/lib/python3.9/dist-packages/torch ]; then\n\
   cd /usr/src/vision && CUDACXX=/usr/local/cuda/bin/nvcc python3 setup.py install\n\
   /usr/src/dpdk/usertools/dpdk-hugepages.py -p 2M --setup 16G\n\
 fi\n\
+/usr/src/dpdk/usertools/dpdk-hugepages.py -p 2M --setup 16G\n\
 exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
