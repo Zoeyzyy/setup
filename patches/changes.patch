@@ -1,0 +1,90 @@
+39a40,51
+>     // send_chunk with rate_control
+>     uint64_t send_arr[nranks][4];
+>     uint64_t bufferCount = chunkCount / 2; // buffer_size should be read from file!!
+>     for (int i = 0; i < nranks; i++){
+>       chunk = modRanks(ringIx + nranks - i);
+>       chunkOffset = chunk * chunkCount;
+>       send_arr[chunk][0] = gridOffset + elemOffset + chunkOffset; // Base address for this chunk
+>       send_arr[chunk][1] = 0;           // Current offset for this chunk
+>       send_arr[chunk][2] = chunkCount; // Total length for this chunk
+>       send_arr[chunk][3] = chunkCount; // Remaining length for this chunk
+>     }
+> 
+42,45c54,61
+<       chunkOffset = chunk * chunkCount;
+<       offset = gridOffset + elemOffset + chunkOffset;
+<       nelem = (int)min(chunkCount, remCount - chunkOffset);
+<       prims.send(offset, nelem);
+---
+>       while(send_array[chunk][3] > 0) {
+>         nelem = (int)min(bufferCount, send_arr[chunk][3]);
+>         offset = send_arr[chunk][0] + send_arr[chunk][1];
+>         prims.send(offset, nelem);
+>         send_arr[chunk][1] += nelem; // Increment current offset
+>         send_arr[chunk][3] -= nelem; // Decrement remaining length
+>       }
+>       
+50,53c66,72
+<         chunkOffset = chunk * chunkCount;
+<         offset = gridOffset + elemOffset + chunkOffset;
+<         nelem = (int)min(chunkCount, remCount - chunkOffset);
+<         prims.recvReduceSend(offset, nelem);
+---
+>         while(send_arr[chunk][3] > 0) {
+>           nelem = (int)min(bufferCount, send_arr[chunk][3]);
+>           offset = send_arr[chunk][0] + send_arr[chunk][1];
+>           prims.recvReduceCopySend(offset, offset, nelem, /*postOp=*/true);
+>           send_arr[chunk][1] += nelem; // Increment current offset
+>           send_arr[chunk][3] -= nelem; // Decrement remaining length
+>         }
+59,62c78,84
+<       chunkOffset = chunk * chunkCount;
+<       offset = gridOffset + elemOffset + chunkOffset;
+<       nelem = (int)min(chunkCount, remCount - chunkOffset);
+<       prims.directRecvReduceCopySend(offset, offset, nelem, /*postOp=*/true);
+---
+>       while(send_arr[chunk][3] > 0) {
+>         nelem = (int)min(bufferCount, send_arr[chunk][3]);
+>         offset = send_arr[chunk][0] + send_arr[chunk][1];
+>         prims.recvReduceCopySend(offset, offset, nelem, /*postOp=*/true);
+>         send_arr[chunk][1] += nelem; // Increment current offset
+>         send_arr[chunk][3] -= nelem; // Decrement remaining length
+>       }
+63a86,95
+>       // init send_array for next iteration
+>       for (int i = 0; i < nranks; i++){
+>         chunk = modRanks(ringIx + nranks - i);
+>         chunkOffset = chunk * chunkCount;
+>         send_arr[chunk][0] = gridOffset + elemOffset + chunkOffset; // Base address for this chunk
+>         send_arr[chunk][1] = 0;           // Current offset for this chunk
+>         send_arr[chunk][2] = chunkCount; // Total length for this chunk
+>         send_arr[chunk][3] = chunkCount; // Remaining length for this chunk
+>       }
+> 
+67,70c99,105
+<         chunkOffset = chunk * chunkCount;
+<         offset = gridOffset + elemOffset + chunkOffset;
+<         nelem = (int)min(chunkCount, remCount - chunkOffset);
+<         prims.directRecvCopySend(offset, nelem);
+---
+>         while(send_arr[chunk][3] > 0) {
+>           nelem = (int)min(bufferCount, send_arr[chunk][3]);
+>           offset = send_arr[chunk][0] + send_arr[chunk][1];
+>           prims.directRecvCopySend(offset, nelem);
+>           send_arr[chunk][1] += nelem; // Increment current offset
+>           send_arr[chunk][3] -= nelem; // Decrement remaining length
+>         }
+75,78c110,116
+<       chunkOffset = chunk * chunkCount;
+<       offset = gridOffset + elemOffset + chunkOffset;
+<       nelem = (int)min(chunkCount, remCount - chunkOffset);
+<       prims.directRecv(offset, nelem);
+---
+>       while (send_arr[chunk][3] > 0) {
+>         nelem = (int)min(bufferCount, send_arr[chunk][3]);
+>         offset = send_arr[chunk][0] + send_arr[chunk][1];
+>         prims.directRecv(offset, nelem);
+>         send_arr[chunk][1] += nelem; // Increment current offset
+>         send_arr[chunk][3] -= nelem; // Decrement remaining length
+>       }
