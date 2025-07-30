@@ -28,7 +28,7 @@ index d5e6a1a..8935593 100644
  target_include_directories(gloo INTERFACE $<INSTALL_INTERFACE:include>)
  if(USE_CUDA)
 diff --git a/gloo/allreduce.cc b/gloo/allreduce.cc
-index 1694dfa..c31160a 100644
+index 1694dfa..37ff8cf 100644
 --- a/gloo/allreduce.cc
 +++ b/gloo/allreduce.cc
 @@ -11,6 +11,8 @@
@@ -53,7 +53,7 @@ index 1694dfa..c31160a 100644
  // Returns function that computes local reduction over inputs and
  // stores it in the output for a given range in those buffers.
  // This is done prior to either sending a region to a neighbor, or
-@@ -140,15 +148,291 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
+@@ -140,15 +148,275 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
      case detail::AllreduceOptionsImpl::BCUBE:
        bcube(opts, reduceInputs, broadcastOutputs);
        break;
@@ -321,22 +321,6 @@ index 1694dfa..c31160a 100644
 +  }
 +}
 +
-+// For a given context size and desired group size, compute the actual group
-+// size per step. Note that the group size per step is n for all steps, only
-+// if n^(#steps) == size. Otherwise, the final group size is != n.
-+std::vector<size_t> computeGroupSizePerStep(size_t size, const size_t n) {
-+  std::vector<size_t> result;
-+  GLOO_ENFORCE_GT(n, 1);
-+  while (size % n == 0) {
-+    result.push_back(n);
-+    size /= n;
-+  }
-+  if (size > 1) {
-+    result.push_back(size);
-+  }
-+  return result;
-+}
-+
  void ring(
      const detail::AllreduceOptionsImpl& opts,
      ReduceRangeFunction reduceInputs,
@@ -345,7 +329,7 @@ index 1694dfa..c31160a 100644
    const auto& context = opts.context;
    const std::vector<std::unique_ptr<transport::UnboundBuffer>>& out = opts.out;
    const auto slot = Slot::build(kAllreduceSlotPrefix, opts.tag);
-@@ -430,6 +714,7 @@ void bcube(
+@@ -430,6 +698,7 @@ void bcube(
      const detail::AllreduceOptionsImpl& opts,
      ReduceRangeFunction reduceInputs,
      BroadcastRangeFunction broadcastOutputs) {
