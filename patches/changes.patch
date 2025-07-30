@@ -28,7 +28,7 @@ index d5e6a1a..8935593 100644
  target_include_directories(gloo INTERFACE $<INSTALL_INTERFACE:include>)
  if(USE_CUDA)
 diff --git a/gloo/allreduce.cc b/gloo/allreduce.cc
-index 1694dfa..36d1317 100644
+index 1694dfa..2da2346 100644
 --- a/gloo/allreduce.cc
 +++ b/gloo/allreduce.cc
 @@ -11,6 +11,8 @@
@@ -53,7 +53,15 @@ index 1694dfa..36d1317 100644
  // Returns function that computes local reduction over inputs and
  // stores it in the output for a given range in those buffers.
  // This is done prior to either sending a region to a neighbor, or
-@@ -140,15 +148,280 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
+@@ -133,6 +141,7 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
+   }
+ 
+   switch (opts.algorithm) {
++    std::cout << "Algorithm: " << opts.algorithm << std::endl;
+     case detail::AllreduceOptionsImpl::UNSPECIFIED:
+     case detail::AllreduceOptionsImpl::RING:
+       ring(opts, reduceInputs, broadcastOutputs);
+@@ -140,15 +149,278 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
      case detail::AllreduceOptionsImpl::BCUBE:
        bcube(opts, reduceInputs, broadcastOutputs);
        break;
@@ -123,11 +131,9 @@ index 1694dfa..36d1317 100644
 +      std::cout << "maxSegmentSize: " << maxSegmentSize << std::endl;
 +    }
 +  }
-+  else{
-+    GLOO_ENFORCE(
++  GLOO_ENFORCE(
 +      false,
 +      "no maxSegmentSize found in /home/maxSegmenSize.txt");
-+  }
 +  const size_t maxSegmentBytes = opts.elementSize *
 +      std::max((size_t)1, maxSegmentSize / opts.elementSize);
 +
@@ -334,7 +340,7 @@ index 1694dfa..36d1317 100644
    const auto& context = opts.context;
    const std::vector<std::unique_ptr<transport::UnboundBuffer>>& out = opts.out;
    const auto slot = Slot::build(kAllreduceSlotPrefix, opts.tag);
-@@ -430,6 +703,7 @@ void bcube(
+@@ -430,6 +702,7 @@ void bcube(
      const detail::AllreduceOptionsImpl& opts,
      ReduceRangeFunction reduceInputs,
      BroadcastRangeFunction broadcastOutputs) {
