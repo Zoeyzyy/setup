@@ -28,7 +28,7 @@ index d5e6a1a..8935593 100644
  target_include_directories(gloo INTERFACE $<INSTALL_INTERFACE:include>)
  if(USE_CUDA)
 diff --git a/gloo/allreduce.cc b/gloo/allreduce.cc
-index 1694dfa..2ce5ed9 100644
+index 1694dfa..2d6ab4d 100644
 --- a/gloo/allreduce.cc
 +++ b/gloo/allreduce.cc
 @@ -11,6 +11,8 @@
@@ -61,7 +61,7 @@ index 1694dfa..2ce5ed9 100644
      case detail::AllreduceOptionsImpl::UNSPECIFIED:
      case detail::AllreduceOptionsImpl::RING:
        ring(opts, reduceInputs, broadcastOutputs);
-@@ -140,11 +149,315 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
+@@ -140,11 +149,306 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
      case detail::AllreduceOptionsImpl::BCUBE:
        bcube(opts, reduceInputs, broadcastOutputs);
        break;
@@ -326,18 +326,16 @@ index 1694dfa..2ce5ed9 100644
 +    if (i >= 2) {
 +      auto prev = computeAllgatherOffsets(i - 2);
 +      if (prev.recvLength > 0) {
-+        // for(size_t j = 0; j < recvCountPerSegment; j++) {
-+        //   out[0]->waitRecv(opts.timeout);
-+        // }
-+        out[0]->waitRecv(opts.timeout);
++        for(size_t j = 0; j < recvCountPerSegment; j++) {
++          out[0]->waitRecv(opts.timeout);
++        }
 +        // Broadcast received segments to output buffers.
 +        broadcastOutputs(prev.recvOffset, prev.recvLength);
 +      }
 +      if (prev.sendLength > 0) {
-+        // for(size_t j = 0; j < sendCountPerSegment; j++) {
-+        //   tmp->waitSend(opts.timeout);
-+        // }
-+        tmp->waitSend(opts.timeout);
++        for(size_t j = 0; j < sendCountPerSegment; j++) {
++          out[0]->waitSend(opts.timeout);
++        }
 +      }
 +    }
 +
@@ -348,23 +346,16 @@ index 1694dfa..2ce5ed9 100644
 +    if (i < (numSegments - numSegmentsPerRank)) {
 +      auto cur = computeAllgatherOffsets(i);
 +      if (cur.recvLength > 0) {
-+        // for(size_t j = 0; j < recvCountPerSegment; j++) {
-+        //   // Receive segment from neighbor into out[0]->ptr.
-+        //   out[0]->recv(recvRank, slot, cur.recvOffset + j * recvSegmentSize,
-+        //                std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
-+        // }
-+        out[0]->recv(
-+            recvRank, slot, segmentOffset[i & 0x1],
-+            cur.recvLength);
++        for(size_t j = 0; j < recvCountPerSegment; j++) {
++          out[0]->recv(recvRank, slot, cur.recvOffset + j * recvSegmentSize,
++                       std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
++        }
 +      }
 +      if (cur.sendLength > 0) {
-+        // for(size_t j = 0; j < sendCountPerSegment; j++) {
-+        //   out[0]->send(sendRank, slot, cur.sendOffset + j * sendSegmentSize,
-+        //                std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize));
-+        // }
-+        out[0]->send(
-+            sendRank, slot, segmentOffset[i & 0x1],
-+            cur.sendLength);
++        for(size_t j = 0; j < sendCountPerSegment; j++) {
++          out[0]->send(sendRank, slot, cur.sendOffset + j * sendSegmentSize,
++                       std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize));
++        }
 +        // Broadcast first segments to outputs buffers.
 +        if (i < numSegmentsPerRank) {
 +          broadcastOutputs(cur.sendOffset, cur.sendLength);
