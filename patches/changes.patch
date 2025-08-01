@@ -28,7 +28,7 @@ index d5e6a1a..8935593 100644
  target_include_directories(gloo INTERFACE $<INSTALL_INTERFACE:include>)
  if(USE_CUDA)
 diff --git a/gloo/allreduce.cc b/gloo/allreduce.cc
-index 1694dfa..b3204de 100644
+index 1694dfa..69d2c10 100644
 --- a/gloo/allreduce.cc
 +++ b/gloo/allreduce.cc
 @@ -11,6 +11,8 @@
@@ -210,9 +210,9 @@ index 1694dfa..b3204de 100644
 +    return result;
 +  };
 +
-+  size_t recvCountPerSegment = (segmentBytes + recvSegmentSize - 1) /
++  ssize_t recvCountPerSegment = (segmentBytes + recvSegmentSize - 1) /
 +      recvSegmentSize;
-+  size_t sendCountPerSegment = (segmentBytes + sendSegmentSize - 1) /
++  ssize_t sendCountPerSegment = (segmentBytes + sendSegmentSize - 1) /
 +      sendSegmentSize;
 +  GLOO_ENFORCE_GT(recvCountPerSegment, 0);
 +  GLOO_ENFORCE_GT(sendCountPerSegment, 0);
