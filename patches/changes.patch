@@ -28,19 +28,23 @@ index d5e6a1a..8935593 100644
  target_include_directories(gloo INTERFACE $<INSTALL_INTERFACE:include>)
  if(USE_CUDA)
 diff --git a/gloo/allreduce.cc b/gloo/allreduce.cc
-index 1694dfa..f926eb7 100644
+index 1694dfa..d9f7cd3 100644
 --- a/gloo/allreduce.cc
 +++ b/gloo/allreduce.cc
-@@ -11,6 +11,8 @@
+@@ -11,6 +11,12 @@
  #include <algorithm>
  #include <array>
  #include <cstring>
 +#include <fstream>
 +#include <iostream>
++#include <chrono>
++#include <sstream>
++#include <ctime>
++#include <iomanip>
  
  #include "gloo/common/logging.h"
  #include "gloo/math.h"
-@@ -37,6 +39,12 @@ void bcube(
+@@ -37,6 +43,12 @@ void bcube(
      ReduceRangeFunction reduceInputs,
      BroadcastRangeFunction broadcastOutputs);
  
@@ -53,7 +57,7 @@ index 1694dfa..f926eb7 100644
  // Returns function that computes local reduction over inputs and
  // stores it in the output for a given range in those buffers.
  // This is done prior to either sending a region to a neighbor, or
-@@ -133,6 +141,7 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
+@@ -133,6 +145,7 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
    }
  
    switch (opts.algorithm) {
@@ -61,7 +65,7 @@ index 1694dfa..f926eb7 100644
      case detail::AllreduceOptionsImpl::UNSPECIFIED:
      case detail::AllreduceOptionsImpl::RING:
        ring(opts, reduceInputs, broadcastOutputs);
-@@ -140,11 +149,321 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
+@@ -140,11 +153,345 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
      case detail::AllreduceOptionsImpl::BCUBE:
        bcube(opts, reduceInputs, broadcastOutputs);
        break;
@@ -73,6 +77,27 @@ index 1694dfa..f926eb7 100644
    }
  }
  
++std::string getCurrentTimeString() {
++    // 获取系统时间点
++    auto now = std::chrono::system_clock::now();
++
++    // 转换为time_t用于格式化年月日时分秒
++    auto in_time_t = std::chrono::system_clock::to_time_t(now);
++
++    // 获取微秒部分
++    auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(
++        now.time_since_epoch()
++    ) % 1000000;
++
++    // 使用stringstream格式化
++    std::stringstream ss;
++    ss << std::put_time(localtime(&in_time_t), "%Y-%m-%d %H:%M:%S")
++       << '.' << std::setfill('0') << std::setw(6) << microseconds.count();
++
++    return ss.str();
++}
++
++
 +void transpose(
 +  const detail::AllreduceOptionsImpl& opts,
 +  ReduceRangeFunction reduceInputs,
@@ -243,6 +268,7 @@ index 1694dfa..f926eb7 100644
 +          if(prev.recvLength - j * recvSegmentSize < 0) break;
 +          tmp->waitRecv(opts.timeout);
 +        }
++        fout << "waitRecv rank:" << recvRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
 +        // Reduce segment from neighbor into out->ptr.
 +        opts.reduce(
 +            static_cast<uint8_t*>(out[0]->ptr) + prev.recvOffset,
@@ -255,6 +281,7 @@ index 1694dfa..f926eb7 100644
 +          if(prev.sendLength - j * sendSegmentSize < 0) break;
 +          out[0]->waitSend(opts.timeout);
 +        }
++        fout << "waitSend rank:" << sendRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
 +      }
 +    }
 +
@@ -266,13 +293,12 @@ index 1694dfa..f926eb7 100644
 +      // Compute send and receive offsets and lengths for this iteration.
 +      auto cur = computeReduceScatterOffsets(i);
 +      if (cur.recvLength > 0) {
-+        auto recvLength = cur.recvLength;
++        fout << "recv rank:" << recvRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
 +        for(ssize_t j = 0; j < recvCountPerSegment; j++) {
 +          // Receive segment from neighbor into temporary buffer.
-+          if(recvLength - j * recvSegmentSize < 0) break;
++          if(cur.recvLength - j * recvSegmentSize < 0) break;
 +          tmp->recv(recvRank, slot, segmentOffset[i & 0x1] + j * recvSegmentSize,
-+                    std::min(recvSegmentSize, recvLength - j * recvSegmentSize));
-+          fout << "recv(" << recvRank << ", " << slot << ", " << segmentOffset[i & 0x1] + j * recvSegmentSize << ", " << std::min(recvSegmentSize, recvLength - j * recvSegmentSize) << ")" << std::endl;
++                    std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
 +        }
 +      }
 +      if (cur.sendLength > 0) {
@@ -280,6 +306,7 @@ index 1694dfa..f926eb7 100644
 +        if (i < numSegmentsPerRank) {
 +          reduceInputs(cur.sendOffset, cur.sendLength);
 +        }
++        fout << "send rank:" << sendRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
 +        for(ssize_t j = 0; j < sendCountPerSegment; j++) {
 +          // Send segment to neighbor from out[0]->ptr.
 +          if(cur.sendLength - j * sendSegmentSize < 0) break;
@@ -338,6 +365,7 @@ index 1694dfa..f926eb7 100644
 +          if(prev.recvLength - j * recvSegmentSize < 0) break;
 +          out[0]->waitRecv(opts.timeout);
 +        }
++        fout << "Brd waitRecv rank:" << recvRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
 +        // Broadcast received segments to output buffers.
 +        broadcastOutputs(prev.recvOffset, prev.recvLength);
 +      }
@@ -346,6 +374,7 @@ index 1694dfa..f926eb7 100644
 +          if(prev.sendLength - j * sendSegmentSize < 0) break;
 +          out[0]->waitSend(opts.timeout);
 +        }
++        fout << "Brd snedRecv rank:" << sendRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
 +      }
 +    }
 +
@@ -356,12 +385,11 @@ index 1694dfa..f926eb7 100644
 +    if (i < (numSegments - numSegmentsPerRank)) {
 +      auto cur = computeAllgatherOffsets(i);
 +      if (cur.recvLength > 0) {
-+        auto recvLength = cur.recvLength;
 +        for(ssize_t j = 0; j < recvCountPerSegment; j++) {
-+          if(recvLength - j * recvSegmentSize < 0) break;
++          if(cur.recvLength - j * recvSegmentSize < 0) break;
 +          out[0]->recv(recvRank, slot, cur.recvOffset + j * recvSegmentSize,
-+                       std::min(recvSegmentSize, recvLength - j * recvSegmentSize));
-+          fout << "recv rank: " << recvRank << " offset: " << cur.recvOffset + j * recvSegmentSize << " size: " << std::min(recvSegmentSize, recvLength - j * recvSegmentSize) << std::endl;
++                       std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
++          fout << "recv rank: " << recvRank << " offset: " << cur.recvOffset + j * recvSegmentSize << " size: " << std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize) << std::endl;
 +        }
 +      }
 +      if (cur.sendLength > 0) {
