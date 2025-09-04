@@ -28,7 +28,7 @@ index d5e6a1a..8935593 100644
  target_include_directories(gloo INTERFACE $<INSTALL_INTERFACE:include>)
  if(USE_CUDA)
 diff --git a/gloo/allreduce.cc b/gloo/allreduce.cc
-index 1694dfa..120e763 100644
+index 1694dfa..accc181 100644
 --- a/gloo/allreduce.cc
 +++ b/gloo/allreduce.cc
 @@ -11,6 +11,8 @@
@@ -61,7 +61,7 @@ index 1694dfa..120e763 100644
      case detail::AllreduceOptionsImpl::UNSPECIFIED:
      case detail::AllreduceOptionsImpl::RING:
        ring(opts, reduceInputs, broadcastOutputs);
-@@ -140,11 +149,317 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
+@@ -140,11 +149,321 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
      case detail::AllreduceOptionsImpl::BCUBE:
        bcube(opts, reduceInputs, broadcastOutputs);
        break;
@@ -266,11 +266,13 @@ index 1694dfa..120e763 100644
 +      // Compute send and receive offsets and lengths for this iteration.
 +      auto cur = computeReduceScatterOffsets(i);
 +      if (cur.recvLength > 0) {
++        auto recvLength = cur.recvLength;
 +        for(ssize_t j = 0; j < recvCountPerSegment; j++) {
 +          // Receive segment from neighbor into temporary buffer.
-+          if(cur.recvLength - j * recvSegmentSize < 0) break;
++          if(recvLength - j * recvSegmentSize < 0) break;
 +          tmp->recv(recvRank, slot, segmentOffset[i & 0x1] + j * recvSegmentSize,
-+                    std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
++                    std::min(recvSegmentSize, recvLength - j * recvSegmentSize));
++          fout << "recv(" << recvRank << ", " << slot << ", " << segmentOffset[i & 0x1] + j * recvSegmentSize << ", " << std::min(recvSegmentSize, recvLength - j * recvSegmentSize) << ")" << std::endl;
 +        }
 +      }
 +      if (cur.sendLength > 0) {
@@ -283,6 +285,7 @@ index 1694dfa..120e763 100644
 +          if(cur.sendLength - j * sendSegmentSize < 0) break;
 +          out[0]->send(sendRank, slot, cur.sendOffset + j * sendSegmentSize,
 +                       std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize));
++          fout << "send(" << sendRank << ", " << slot << ", " << cur.sendOffset + j * sendSegmentSize << ", " << std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize) << ")" << std::endl;
 +        }
 +      }
 +    }
@@ -353,11 +356,12 @@ index 1694dfa..120e763 100644
 +    if (i < (numSegments - numSegmentsPerRank)) {
 +      auto cur = computeAllgatherOffsets(i);
 +      if (cur.recvLength > 0) {
++        auto recvLength = cur.recvLength;
 +        for(ssize_t j = 0; j < recvCountPerSegment; j++) {
-+          if(cur.recvLength - j * recvSegmentSize < 0) break;
++          if(recvLength - j * recvSegmentSize < 0) break;
 +          out[0]->recv(recvRank, slot, cur.recvOffset + j * recvSegmentSize,
-+                       std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
-+          fout << "recv rank: " << recvRank << " offset: " << cur.recvOffset + j * recvSegmentSize << " size: " << std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize) << std::endl;
++                       std::min(recvSegmentSize, recvLength - j * recvSegmentSize));
++          fout << "recv rank: " << recvRank << " offset: " << cur.recvOffset + j * recvSegmentSize << " size: " << std::min(recvSegmentSize, recvLength - j * recvSegmentSize) << std::endl;
 +        }
 +      }
 +      if (cur.sendLength > 0) {
