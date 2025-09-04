@@ -28,7 +28,7 @@ index d5e6a1a..8935593 100644
  target_include_directories(gloo INTERFACE $<INSTALL_INTERFACE:include>)
  if(USE_CUDA)
 diff --git a/gloo/allreduce.cc b/gloo/allreduce.cc
-index 1694dfa..accc181 100644
+index 1694dfa..f926eb7 100644
 --- a/gloo/allreduce.cc
 +++ b/gloo/allreduce.cc
 @@ -11,6 +11,8 @@
@@ -366,7 +366,7 @@ index 1694dfa..accc181 100644
 +      }
 +      if (cur.sendLength > 0) {
 +        for(ssize_t j = 0; j < sendCountPerSegment; j++) {
-+          if(cur.recvLength - j * recvSegmentSize < 0) break;
++          if(cur.sendLength - j * sendSegmentSize < 0) break;
 +          out[0]->send(sendRank, slot, cur.sendOffset + j * sendSegmentSize,
 +                       std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize));
 +          fout << "send rank: " << sendRank << " offset: " << cur.sendOffset + j * sendSegmentSize << " size: " << std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize) << std::endl;
