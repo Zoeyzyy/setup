@@ -28,20 +28,19 @@ index d5e6a1a..8935593 100644
  target_include_directories(gloo INTERFACE $<INSTALL_INTERFACE:include>)
  if(USE_CUDA)
 diff --git a/gloo/allreduce.cc b/gloo/allreduce.cc
-index 1694dfa..923358a 100644
+index 1694dfa..a3d193c 100644
 --- a/gloo/allreduce.cc
 +++ b/gloo/allreduce.cc
-@@ -10,7 +10,13 @@
- 
+@@ -11,6 +11,12 @@
  #include <algorithm>
  #include <array>
-+#include <chrono>
  #include <cstring>
-+#include <ctime>
 +#include <fstream>
-+#include <iomanip>
 +#include <iostream>
++#include <chrono>
 +#include <sstream>
++#include <ctime>
++#include <iomanip>
  
  #include "gloo/common/logging.h"
  #include "gloo/math.h"
@@ -66,7 +65,7 @@ index 1694dfa..923358a 100644
      case detail::AllreduceOptionsImpl::UNSPECIFIED:
      case detail::AllreduceOptionsImpl::RING:
        ring(opts, reduceInputs, broadcastOutputs);
-@@ -140,11 +153,377 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
+@@ -140,11 +153,350 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
      case detail::AllreduceOptionsImpl::BCUBE:
        bcube(opts, reduceInputs, broadcastOutputs);
        break;
@@ -79,29 +78,30 @@ index 1694dfa..923358a 100644
  }
  
 +std::string getCurrentTimeString() {
-+  // 获取系统时间点
-+  auto now = std::chrono::system_clock::now();
++    // 获取系统时间点
++    auto now = std::chrono::system_clock::now();
 +
-+  // 转换为time_t用于格式化年月日时分秒
-+  auto in_time_t = std::chrono::system_clock::to_time_t(now);
++    // 转换为time_t用于格式化年月日时分秒
++    auto in_time_t = std::chrono::system_clock::to_time_t(now);
 +
-+  // 获取微秒部分
-+  auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(
-+                          now.time_since_epoch()) %
-+      1000000;
++    // 获取微秒部分
++    auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(
++        now.time_since_epoch()
++    ) % 1000000;
 +
-+  // 使用stringstream格式化
-+  std::stringstream ss;
-+  ss << std::put_time(localtime(&in_time_t), "%Y-%m-%d %H:%M:%S") << '.'
-+     << std::setfill('0') << std::setw(6) << microseconds.count();
++    // 使用stringstream格式化
++    std::stringstream ss;
++    ss << std::put_time(localtime(&in_time_t), "%Y-%m-%d %H:%M:%S")
++       << '.' << std::setfill('0') << std::setw(6) << microseconds.count();
 +
-+  return ss.str();
++    return ss.str();
 +}
 +
++
 +void transpose(
-+    const detail::AllreduceOptionsImpl& opts,
-+    ReduceRangeFunction reduceInputs,
-+    BroadcastRangeFunction broadcastOutputs) {
++  const detail::AllreduceOptionsImpl& opts,
++  ReduceRangeFunction reduceInputs,
++  BroadcastRangeFunction broadcastOutputs) {
 +  const auto& context = opts.context;
 +  const std::vector<std::unique_ptr<transport::UnboundBuffer>>& out = opts.out;
 +  const auto slot = Slot::build(kAllreduceSlotPrefix, opts.tag);
@@ -159,13 +159,12 @@ index 1694dfa..923358a 100644
 +    std::cout << "recvSegmentSize: " << recvSegmentSize
 +              << ", sendSegmentSize: " << sendSegmentSize << std::endl;
 +  } else {
-+    std::cerr << "Failed to read segment sizes from file. "
-+              << "Using default values." << std::endl;
++      std::cerr << "Failed to read segment sizes from file. "
++                << "Using default values." << std::endl;
 +  }
 +  std::ostringstream filenameStream;
 +  filenameStream << "/home/TimeStamp.txt";
-+  // filenameStream << "/home/TimeStamp-" << recvSegmentSize << "-" <<
-+  // sendSegmentSize << ".txt";
++  // filenameStream << "/home/TimeStamp-" << recvSegmentSize << "-" << sendSegmentSize << ".txt";
 +  std::ofstream fout(filenameStream.str(), std::ios::app);
 +
 +  const size_t maxSegmentBytes = opts.elementSize *
@@ -240,10 +239,10 @@ index 1694dfa..923358a 100644
 +    return result;
 +  };
 +
-+  ssize_t recvCountPerSegment =
-+      (segmentBytes + recvSegmentSize - 1) / recvSegmentSize;
-+  ssize_t sendCountPerSegment =
-+      (segmentBytes + sendSegmentSize - 1) / sendSegmentSize;
++  ssize_t recvCountPerSegment = (segmentBytes + recvSegmentSize - 1) /
++      recvSegmentSize;
++  ssize_t sendCountPerSegment = (segmentBytes + sendSegmentSize - 1) /
++      sendSegmentSize;
 +  GLOO_ENFORCE_GT(recvCountPerSegment, 0);
 +  GLOO_ENFORCE_GT(sendCountPerSegment, 0);
 +
@@ -258,25 +257,51 @@ index 1694dfa..923358a 100644
 +  //   complete on iterations 2 and 3).
 +  //
 +  for (auto i = 0; i < (numSegments - numSegmentsPerRank + 2); i++) {
++    if (i >= 2) {
++      // Compute send and receive offsets and lengths two iterations
++      // ago. Needed so we know when to wait for an operation and when
++      // to ignore (when the offset was out of bounds), and know where
++      // to reduce the contents of the temporary buffer.
++      auto prev = computeReduceScatterOffsets(i - 2);
++      if (prev.recvLength > 0) {
++        // Prepare out[0]->ptr to hold the local reduction
++        reduceInputs(prev.recvOffset, prev.recvLength);
++        // Wait for segment from neighbor.
++        for(ssize_t j = 0; j < recvCountPerSegment; j++) {
++          if(prev.recvLength - j * recvSegmentSize < 0) break;
++          tmp->waitRecv(opts.timeout);
++        }
++        fout << "waitRecv end recvrank:" << recvRank << " time: " << getCurrentTimeString() << " i: " << i - 2 << std::endl;
++        // Reduce segment from neighbor into out->ptr.
++        opts.reduce(
++            static_cast<uint8_t*>(out[0]->ptr) + prev.recvOffset,
++            static_cast<const uint8_t*>(out[0]->ptr) + prev.recvOffset,
++            static_cast<const uint8_t*>(tmp->ptr) + segmentOffset[i & 0x1],
++            prev.recvLength / opts.elementSize);
++      }
++      if (prev.sendLength > 0) {
++        for(ssize_t j = 0; j < sendCountPerSegment; j++) {
++          if(prev.sendLength - j * sendSegmentSize < 0) break;
++          out[0]->waitSend(opts.timeout);
++        }
++        // fout << "waitSend rank:" << sendRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
++      }
++    }
++
 +    // Issue new send and receive operation in all but the final two
 +    // iterations. At that point we have already sent all data we
 +    // needed to and only have to wait for the final segments to be
 +    // reduced into the output.
-+    auto cur = computeReduceScatterOffsets(i);
 +    if (i < (numSegments - numSegmentsPerRank)) {
 +      // Compute send and receive offsets and lengths for this iteration.
++      auto cur = computeReduceScatterOffsets(i);
 +      if (cur.recvLength > 0) {
-+        // fout << "recv rank:" << recvRank << " time: " <<
-+        // getCurrentTimeString() << " i: " << i << std::endl;
-+        for (ssize_t j = 0; j < recvCountPerSegment; j++) {
++        // fout << "recv rank:" << recvRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
++        for(ssize_t j = 0; j < recvCountPerSegment; j++) {
 +          // Receive segment from neighbor into temporary buffer.
-+          if (cur.recvLength - j * recvSegmentSize < 0)
-+            break;
-+          tmp->recv(
-+              recvRank,
-+              slot,
-+              segmentOffset[i & 0x1] + j * recvSegmentSize,
-+              std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
++          if(cur.recvLength - j * recvSegmentSize < 0) break;
++          tmp->recv(recvRank, slot, segmentOffset[i & 0x1] + j * recvSegmentSize,
++                    std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
 +        }
 +      }
 +      if (cur.sendLength > 0) {
@@ -284,50 +309,15 @@ index 1694dfa..923358a 100644
 +        if (i < numSegmentsPerRank) {
 +          reduceInputs(cur.sendOffset, cur.sendLength);
 +        }
-+        fout << "send start rank:" << sendRank
-+             << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
-+        for (ssize_t j = 0; j < sendCountPerSegment; j++) {
++        fout << "send start sendrank:" << sendRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
++        for(ssize_t j = 0; j < sendCountPerSegment; j++) {
 +          // Send segment to neighbor from out[0]->ptr.
-+          if (cur.sendLength - j * sendSegmentSize < 0)
-+            break;
-+          out[0]->send(
-+              sendRank,
-+              slot,
-+              cur.sendOffset + j * sendSegmentSize,
-+              std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize));
-+          // fout << "send(" << sendRank << ", " << slot << ", " <<
-+          // cur.sendOffset + j * sendSegmentSize << ", " <<
-+          // std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize) <<
-+          // ")" << std::endl;
++          if(cur.sendLength - j * sendSegmentSize < 0) break;
++          out[0]->send(sendRank, slot, cur.sendOffset + j * sendSegmentSize,
++                       std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize));
++          // fout << "send(" << sendRank << ", " << slot << ", " << cur.sendOffset + j * sendSegmentSize << ", " << std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize) << ")" << std::endl;
 +        }
 +      }
-+    }
-+    if (cur.recvLength > 0) {
-+      // Prepare out[0]->ptr to hold the local reduction
-+      reduceInputs(cur.recvOffset, cur.recvLength);
-+      // Wait for segment from neighbor.
-+      for (ssize_t j = 0; j < recvCountPerSegment; j++) {
-+        if (cur.recvLength - j * recvSegmentSize < 0)
-+          break;
-+        tmp->waitRecv(opts.timeout);
-+      }
-+      // fout << "waitRecv rank:" << recvRank << " time: " <<
-+      // getCurrentTimeString() << " i: " << i << std::endl; Reduce segment from
-+      // neighbor into out->ptr.
-+      opts.reduce(
-+          static_cast<uint8_t*>(out[0]->ptr) + cur.recvOffset,
-+          static_cast<const uint8_t*>(out[0]->ptr) + cur.recvOffset,
-+          static_cast<const uint8_t*>(tmp->ptr) + segmentOffset[i & 0x1],
-+          cur.recvLength / opts.elementSize);
-+    }
-+    if (cur.sendLength > 0) {
-+      for (ssize_t j = 0; j < sendCountPerSegment; j++) {
-+        if (cur.sendLength - j * sendSegmentSize < 0)
-+          break;
-+        out[0]->waitSend(opts.timeout);
-+      }
-+      // fout << "waitSend rank:" << sendRank << " time: " <<
-+      // getCurrentTimeString() << " i: " << i << std::endl;
 +    }
 +  }
 +
@@ -374,24 +364,20 @@ index 1694dfa..923358a 100644
 +    if (i >= 2) {
 +      auto prev = computeAllgatherOffsets(i - 2);
 +      if (prev.recvLength > 0) {
-+        for (size_t j = 0; j < recvCountPerSegment; j++) {
-+          if (prev.recvLength - j * recvSegmentSize < 0)
-+            break;
++        for(size_t j = 0; j < recvCountPerSegment; j++) {
++          if(prev.recvLength - j * recvSegmentSize < 0) break;
 +          out[0]->waitRecv(opts.timeout);
 +        }
-+        // fout << "Brd waitRecv rank:" << recvRank << " time: " <<
-+        // getCurrentTimeString() << " i: " << i << std::endl; Broadcast
-+        // received segments to output buffers.
++        // fout << "Brd waitRecv rank:" << recvRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
++        // Broadcast received segments to output buffers.
 +        broadcastOutputs(prev.recvOffset, prev.recvLength);
 +      }
 +      if (prev.sendLength > 0) {
-+        for (size_t j = 0; j < sendCountPerSegment; j++) {
-+          if (prev.sendLength - j * sendSegmentSize < 0)
-+            break;
++        for(size_t j = 0; j < sendCountPerSegment; j++) {
++          if(prev.sendLength - j * sendSegmentSize < 0) break;
 +          out[0]->waitSend(opts.timeout);
 +        }
-+        // fout << "Brd waitSend rank:" << sendRank << " time: " <<
-+        // getCurrentTimeString() << " i: " << i << std::endl;
++        // fout << "Brd waitSend rank:" << sendRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
 +      }
 +    }
 +
@@ -402,35 +388,21 @@ index 1694dfa..923358a 100644
 +    if (i < (numSegments - numSegmentsPerRank)) {
 +      auto cur = computeAllgatherOffsets(i);
 +      if (cur.recvLength > 0) {
-+        // fout << "Brd recv rank:" << recvRank << " time: " <<
-+        // getCurrentTimeString() << " i: " << i << std::endl;
-+        for (ssize_t j = 0; j < recvCountPerSegment; j++) {
-+          if (cur.recvLength - j * recvSegmentSize < 0)
-+            break;
-+          out[0]->recv(
-+              recvRank,
-+              slot,
-+              cur.recvOffset + j * recvSegmentSize,
-+              std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
-+          // fout << "recv rank: " << recvRank << " offset: " << cur.recvOffset
-+          // + j * recvSegmentSize << " size: " << std::min(recvSegmentSize,
-+          // cur.recvLength - j * recvSegmentSize) << std::endl;
++        // fout << "Brd recv rank:" << recvRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
++        for(ssize_t j = 0; j < recvCountPerSegment; j++) {
++          if(cur.recvLength - j * recvSegmentSize < 0) break;
++          out[0]->recv(recvRank, slot, cur.recvOffset + j * recvSegmentSize,
++                       std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize));
++          // fout << "recv rank: " << recvRank << " offset: " << cur.recvOffset + j * recvSegmentSize << " size: " << std::min(recvSegmentSize, cur.recvLength - j * recvSegmentSize) << std::endl;
 +        }
 +      }
 +      if (cur.sendLength > 0) {
-+        fout << "send start rank:" << sendRank
-+             << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
-+        for (ssize_t j = 0; j < sendCountPerSegment; j++) {
-+          if (cur.sendLength - j * sendSegmentSize < 0)
-+            break;
-+          out[0]->send(
-+              sendRank,
-+              slot,
-+              cur.sendOffset + j * sendSegmentSize,
-+              std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize));
-+          // fout << "send rank: " << sendRank << " offset: " << cur.sendOffset
-+          // + j * sendSegmentSize << " size: " << std::min(sendSegmentSize,
-+          // cur.sendLength - j * sendSegmentSize) << std::endl;
++        fout << "send start rank:" << sendRank << " time: " << getCurrentTimeString() << " i: " << i << std::endl;
++        for(ssize_t j = 0; j < sendCountPerSegment; j++) {
++          if(cur.sendLength - j * sendSegmentSize < 0) break;
++          out[0]->send(sendRank, slot, cur.sendOffset + j * sendSegmentSize,
++                       std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize));
++          // fout << "send rank: " << sendRank << " offset: " << cur.sendOffset + j * sendSegmentSize << " size: " << std::min(sendSegmentSize, cur.sendLength - j * sendSegmentSize) << std::endl;
 +        }
 +        // Broadcast first segments to outputs buffers.
 +        if (i < numSegmentsPerRank) {
@@ -444,67 +416,6 @@ index 1694dfa..923358a 100644
  void ring(
      const detail::AllreduceOptionsImpl& opts,
      ReduceRangeFunction reduceInputs,
-@@ -486,10 +865,11 @@ void bcube(
-           group.bufferOffset + (groupRank * group.chunkLength);
-       group.myChunkLength = std::min(
-           size_t(group.chunkLength),
--          size_t(std::max(
--              int64_t(0),
--              int64_t(group.bufferLength) -
--                  int64_t(groupRank * group.chunkLength))));
-+          size_t(
-+              std::max(
-+                  int64_t(0),
-+                  int64_t(group.bufferLength) -
-+                      int64_t(groupRank * group.chunkLength))));
- 
-       // Store a const copy of this group in the vector.
-       groups.push_back(group);
-@@ -544,9 +924,11 @@ void bcube(
-           group.bufferOffset + i * group.chunkLength;
-       const size_t currentChunkLength = std::min(
-           size_t(group.chunkLength),
--          size_t(std::max(
--              int64_t(0),
--              int64_t(group.bufferLength) - int64_t(i * group.chunkLength))));
-+          size_t(
-+              std::max(
-+                  int64_t(0),
-+                  int64_t(group.bufferLength) -
-+                      int64_t(i * group.chunkLength))));
-       // Compute the local reduction only in the first step of the algorithm.
-       // In subsequent steps, we already have a partially reduced result.
-       if (step == 0) {
-@@ -617,9 +999,11 @@ void bcube(
-           group.bufferOffset + i * group.chunkLength;
-       const size_t currentChunkLength = std::min(
-           size_t(group.chunkLength),
--          size_t(std::max(
--              int64_t(0),
--              int64_t(group.bufferLength) - int64_t(i * group.chunkLength))));
-+          size_t(
-+              std::max(
-+                  int64_t(0),
-+                  int64_t(group.bufferLength) -
-+                      int64_t(i * group.chunkLength))));
-       out->recv(
-           src,
-           slot,
-@@ -660,9 +1044,11 @@ void bcube(
-           group.bufferOffset + i * group.chunkLength;
-       const size_t currentChunkLength = std::min(
-           size_t(group.chunkLength),
--          size_t(std::max(
--              int64_t(0),
--              int64_t(group.bufferLength) - int64_t(i * group.chunkLength))));
-+          size_t(
-+              std::max(
-+                  int64_t(0),
-+                  int64_t(group.bufferLength) -
-+                      int64_t(i * group.chunkLength))));
-       broadcastOutputs(
-           currentChunkOffset * elementSize, currentChunkLength * elementSize);
-     }
 diff --git a/gloo/allreduce.h b/gloo/allreduce.h
 index 904eb8b..bcb1f8a 100644
 --- a/gloo/allreduce.h
