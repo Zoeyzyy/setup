@@ -28,7 +28,7 @@ index d5e6a1a..8935593 100644
  target_include_directories(gloo INTERFACE $<INSTALL_INTERFACE:include>)
  if(USE_CUDA)
 diff --git a/gloo/allreduce.cc b/gloo/allreduce.cc
-index 1694dfa..c02da79 100644
+index 1694dfa..947d788 100644
 --- a/gloo/allreduce.cc
 +++ b/gloo/allreduce.cc
 @@ -11,6 +11,12 @@
@@ -65,7 +65,7 @@ index 1694dfa..c02da79 100644
      case detail::AllreduceOptionsImpl::UNSPECIFIED:
      case detail::AllreduceOptionsImpl::RING:
        ring(opts, reduceInputs, broadcastOutputs);
-@@ -140,15 +153,39 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
+@@ -140,11 +153,351 @@ void allreduce(const detail::AllreduceOptionsImpl& opts) {
      case detail::AllreduceOptionsImpl::BCUBE:
        bcube(opts, reduceInputs, broadcastOutputs);
        break;
@@ -77,10 +77,6 @@ index 1694dfa..c02da79 100644
    }
  }
  
--void ring(
--    const detail::AllreduceOptionsImpl& opts,
--    ReduceRangeFunction reduceInputs,
--    BroadcastRangeFunction broadcastOutputs) {
 +std::string getCurrentTimeString() {
 +    // 获取系统时间点
 +    auto now = std::chrono::system_clock::now();
@@ -106,13 +102,51 @@ index 1694dfa..c02da79 100644
 +  const detail::AllreduceOptionsImpl& opts,
 +  ReduceRangeFunction reduceInputs,
 +  BroadcastRangeFunction broadcastOutputs) {
-   const auto& context = opts.context;
-   const std::vector<std::unique_ptr<transport::UnboundBuffer>>& out = opts.out;
-   const auto slot = Slot::build(kAllreduceSlotPrefix, opts.tag);
-@@ -194,6 +231,26 @@ void ring(
-   // rounding it up to the nearest multiple of the element size.
-   // For example, if maxSegmentSize = 10, and elementSize = 4,
-   // then after rounding up: segmentSize = 12;
++  const auto& context = opts.context;
++  const std::vector<std::unique_ptr<transport::UnboundBuffer>>& out = opts.out;
++  const auto slot = Slot::build(kAllreduceSlotPrefix, opts.tag);
++  const size_t totalBytes = opts.elements * opts.elementSize;
++
++  // Note: context->size > 1
++  const auto recvRank = (context->size + context->rank + 1) % context->size;
++  const auto sendRank = (context->size + context->rank - 1) % context->size;
++  GLOO_ENFORCE(
++      context->getPair(recvRank),
++      "missing connection between rank " + std::to_string(context->rank) +
++          " (this process) and rank " + std::to_string(recvRank));
++  GLOO_ENFORCE(
++      context->getPair(sendRank),
++      "missing connection between rank " + std::to_string(context->rank) +
++          " (this process) and rank " + std::to_string(sendRank));
++
++  // The ring algorithm works as follows.
++  //
++  // The given input is split into a number of chunks equal to the
++  // number of processes. Once the algorithm has finished, every
++  // process hosts one chunk of reduced output, in sequential order
++  // (rank 0 has chunk 0, rank 1 has chunk 1, etc.). As the input may
++  // not be divisible by the number of processes, the chunk on the
++  // final ranks may have partial output or may be empty.
++  //
++  // As a chunk is passed along the ring and contains the reduction of
++  // successively more ranks, we have to alternate between performing
++  // I/O for that chunk and computing the reduction between the
++  // received chunk and the local chunk. To avoid this alternating
++  // pattern, we split up a chunk into multiple segments (>= 2), and
++  // ensure we have one segment in flight while computing a reduction
++  // on the other. The segment size has an upper bound to minimize
++  // memory usage and avoid poor cache behavior. This means we may
++  // have many segments per chunk when dealing with very large inputs.
++  //
++  // The nomenclature here is reflected in the variable naming below
++  // (one chunk per rank and many segments per chunk).
++  //
++
++  // Ensure that maximum segment size is a multiple of the element size.
++  // Otherwise, the segment size can exceed the maximum segment size after
++  // rounding it up to the nearest multiple of the element size.
++  // For example, if maxSegmentSize = 10, and elementSize = 4,
++  // then after rounding up: segmentSize = 12;
 +  ssize_t sendSegmentSize = opts.maxSegmentSize;
 +  ssize_t recvSegmentSize = opts.maxSegmentSize;
 +
@@ -133,13 +167,31 @@ index 1694dfa..c02da79 100644
 +  // filenameStream << "/home/TimeStamp-" << recvSegmentSize << "-" << sendSegmentSize << ".txt";
 +  std::ofstream fout(filenameStream.str(), std::ios::app);
 +
-   const size_t maxSegmentBytes = opts.elementSize *
-       std::max((size_t)1, opts.maxSegmentSize / opts.elementSize);
- 
-@@ -218,6 +275,302 @@ void ring(
-   const size_t segmentBytes =
-       roundUp((totalBytes + numSegments - 1) / numSegments, opts.elementSize);
- 
++  const size_t maxSegmentBytes = opts.elementSize *
++      std::max((size_t)1, opts.maxSegmentSize / opts.elementSize);
++
++  // Compute how many segments make up the input buffer.
++  //
++  // Round up to the nearest multiple of the context size such that
++  // there is an equal number of segments per process and execution is
++  // symmetric across processes.
++  //
++  // The minimum is twice the context size, because the algorithm
++  // below overlaps sending/receiving a segment with computing the
++  // reduction of the another segment.
++  //
++  const size_t context_size = 2;
++  const size_t numSegments = roundUp(
++      std::max(
++          (totalBytes + (maxSegmentBytes - 1)) / maxSegmentBytes,
++          (size_t)context_size * 2),
++      (size_t)context_size);
++  GLOO_ENFORCE_EQ(numSegments % context_size, 0);
++  GLOO_ENFORCE_GE(numSegments, context_size * 2);
++  const size_t numSegmentsPerRank = numSegments / context_size;
++  const size_t segmentBytes =
++      roundUp((totalBytes + numSegments - 1) / numSegments, opts.elementSize);
++
 +  // Allocate scratch space to hold two chunks
 +  std::unique_ptr<uint8_t[]> tmpAllocation(new uint8_t[maxSegmentBytes * 2]);
 +  std::unique_ptr<transport::UnboundBuffer> tmpBuffer =
@@ -362,83 +414,9 @@ index 1694dfa..c02da79 100644
 +  }
 +}
 +
-+void ring(
-+    const detail::AllreduceOptionsImpl& opts,
-+    ReduceRangeFunction reduceInputs,
-+    BroadcastRangeFunction broadcastOutputs) {
-+  const auto& context = opts.context;
-+  const std::vector<std::unique_ptr<transport::UnboundBuffer>>& out = opts.out;
-+  const auto slot = Slot::build(kAllreduceSlotPrefix, opts.tag);
-+  const size_t totalBytes = opts.elements * opts.elementSize;
-+
-+  // Note: context->size > 1
-+  const auto recvRank = (context->size + context->rank + 1) % context->size;
-+  const auto sendRank = (context->size + context->rank - 1) % context->size;
-+  GLOO_ENFORCE(
-+      context->getPair(recvRank),
-+      "missing connection between rank " + std::to_string(context->rank) +
-+          " (this process) and rank " + std::to_string(recvRank));
-+  GLOO_ENFORCE(
-+      context->getPair(sendRank),
-+      "missing connection between rank " + std::to_string(context->rank) +
-+          " (this process) and rank " + std::to_string(sendRank));
-+
-+  // The ring algorithm works as follows.
-+  //
-+  // The given input is split into a number of chunks equal to the
-+  // number of processes. Once the algorithm has finished, every
-+  // process hosts one chunk of reduced output, in sequential order
-+  // (rank 0 has chunk 0, rank 1 has chunk 1, etc.). As the input may
-+  // not be divisible by the number of processes, the chunk on the
-+  // final ranks may have partial output or may be empty.
-+  //
-+  // As a chunk is passed along the ring and contains the reduction of
-+  // successively more ranks, we have to alternate between performing
-+  // I/O for that chunk and computing the reduction between the
-+  // received chunk and the local chunk. To avoid this alternating
-+  // pattern, we split up a chunk into multiple segments (>= 2), and
-+  // ensure we have one segment in flight while computing a reduction
-+  // on the other. The segment size has an upper bound to minimize
-+  // memory usage and avoid poor cache behavior. This means we may
-+  // have many segments per chunk when dealing with very large inputs.
-+  //
-+  // The nomenclature here is reflected in the variable naming below
-+  // (one chunk per rank and many segments per chunk).
-+  //
-+
-+  // Ensure that maximum segment size is a multiple of the element size.
-+  // Otherwise, the segment size can exceed the maximum segment size after
-+  // rounding it up to the nearest multiple of the element size.
-+  // For example, if maxSegmentSize = 10, and elementSize = 4,
-+  // then after rounding up: segmentSize = 12;
-+  const size_t maxSegmentBytes = opts.elementSize *
-+      std::max((size_t)1, opts.maxSegmentSize / opts.elementSize);
-+
-+  // Compute how many segments make up the input buffer.
-+  //
-+  // Round up to the nearest multiple of the context size such that
-+  // there is an equal number of segments per process and execution is
-+  // symmetric across processes.
-+  //
-+  // The minimum is twice the context size, because the algorithm
-+  // below overlaps sending/receiving a segment with computing the
-+  // reduction of the another segment.
-+  //
-+  const size_t context_size = 2;
-+  const size_t numSegments = roundUp(
-+      std::max(
-+          (totalBytes + (maxSegmentBytes - 1)) / maxSegmentBytes,
-+          (size_t)context_size * 2),
-+      (size_t)context_size);
-+  GLOO_ENFORCE_EQ(numSegments % context_size, 0);
-+  GLOO_ENFORCE_GE(numSegments, context_size * 2);
-+  const size_t numSegmentsPerRank = numSegments / context_size;
-+  const size_t segmentBytes =
-+      roundUp((totalBytes + numSegments - 1) / numSegments, opts.elementSize);
-+
-   // Allocate scratch space to hold two chunks
-   std::unique_ptr<uint8_t[]> tmpAllocation(new uint8_t[segmentBytes * 2]);
-   std::unique_ptr<transport::UnboundBuffer> tmpBuffer =
+ void ring(
+     const detail::AllreduceOptionsImpl& opts,
+     ReduceRangeFunction reduceInputs,
 diff --git a/gloo/allreduce.h b/gloo/allreduce.h
 index 904eb8b..bcb1f8a 100644
 --- a/gloo/allreduce.h
